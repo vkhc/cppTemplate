@@ -1,9 +1,36 @@
 class Timer {
 public:
+	void set();
+	void stop();
 
+	double elapsed_ns();
+	double elapsed_ms();
+	double elapsed_s();
+private:
+	std::chrono::steady_clock::time_point start;
+	std::chrono::steady_clock::time_point end;
 };
 
-const char* hello()
+void Timer::set()
 {
-	return "Ola senior\n";
+	start = std::chrono::steady_clock::now();
 }
+
+void Timer::stop()
+{
+	end = std::chrono::steady_clock::now();
+}
+
+double Timer::elapsed_ns()
+{
+	return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+}
+double Timer::elapsed_ms()
+{
+	return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+}
+double Timer::elapsed_s()
+{
+	return std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+}
+
