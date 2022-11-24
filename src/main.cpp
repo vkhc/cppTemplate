@@ -72,12 +72,15 @@ void increment_by_val(inputIt begin, inputIt end, typename std::iterator_traits<
 }
 
 template<typename inputIt, typename outputIt>
-void partial_sum_increment(inputIt begin, inputIt end, outputIt outBegin, std::promise<typename std::iterator_traits<inputIt>::value_type> outValue, std::promise<typename std::iterator_traits<inputIt>::value_type> incValue)
+void partial_sum_increment(inputIt begin, inputIt end, outputIt outBegin,
+						   std::promise<typename std::iterator_traits<inputIt>::value_type> outValue,
+						   std::shared_future<typename std::iterator_traits<inputIt>::value_type> incValue)
 {
-	sub_partial_sum<inputIt, outputIt>(begin, end, outBegin, outValue);
+	sub_partial_sum<inputIt, outputIt>(begin, end, outBegin, std::move(outValue));
 
-	auto future = incValue.get_future();
-	increment_by_val(begin, end, future.get());
+	auto val = incValue.get();
+	//increment_by_val(outBegin, outBegin + std::distance(begin, end), val);
+	std::for_each(outBegin, outBegin + std::distance(begin, end), [&val](auto& i) { i += val; });
 }
 
 /* Parallel partial sum
@@ -93,47 +96,69 @@ void partial_sum_increment(inputIt begin, inputIt end, outputIt outBegin, std::p
 template<typename inputIt, typename outputIt>
 void p_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
 {
-	int nThreads = 4;
+	int nThreads = 8;
 	// Divide Array into subarrays
 	auto chunks = getDivisions(begin, end, nThreads);
 
 	using valType = std::iterator_traits<inputIt>::value_type;
 
 	std::vector<std::promise<valType>> increments(chunks.size() + 1);
+	std::vector<std::shared_future<valType>> incF(increments.size());
+
+	for (int i = 0; i < incF.size(); ++i) {
+		incF[i] = increments[i].get_future();
+	}
+	increments[0].set_value(0);
 
 	std::vector<std::thread> threads;
 	threads.reserve(chunks.size());
 
 	for (int i = 0; i < chunks.size(); ++i) {
-#if 1
-		threads.emplace_back(partial_sum_increment<inputIt, outputIt>, chunks[i].first, chunks[i].second, outBegin + std::distance(begin, chunks[i].first), increments[i+1], increments[i]);
-#else // bug here 
-		threads.push_back([&]() {
-			sub_partial_sum<inputIt, outputIt>(chunks[i].first, chunks[i].second, outBegin + std::distance(begin, chunks[i].first), increments[i]);
-			});
+		auto inFirst = chunks[i].first;
+		auto inLast = chunks[i].second;
+		auto outFirst = outBegin + std::distance(begin, inFirst);
+		auto& promise = increments[i+1];
+
+#if 0
+		threads.emplace_back(partial_sum_increment<inputIt, outputIt>, inFirst, inLast, outFirst, std::move(promise), std::move(incF[i]));
+#else
+
+		threads.emplace_back([&promise, &incF, inFirst, inLast, outFirst, i]() {
+			sub_partial_sum<inputIt, outputIt>(inFirst, inLast, outFirst, std::move(promise));
+
+			//for (int j = 0; j <= i; ++j) {
+			//	auto incVal = std::move(incF[j]).get();
+			//	for_each(outFirst, outFirst + std::distance(inFirst, inLast), [&](auto& x) { x += incVal; });
+			//}
+		});
+
 #endif
 	}
 
 	for (auto& t : threads)
 		t.join();
-
 }
 
 
 int main()
 {
+	std::vector<int> vIn(1000000000, 1);
+	auto vOut = vIn;
 
-	std::vector<int> in = { 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 };
-	auto out = in;
+	auto vInMy = vIn;
+	auto vOutMy = vIn;
 
-	p_partial_sum(in.begin(), in.end(), out.begin());
+	Timer t1, t2;
 
-	for (auto& i : out)
-		std::cout << i << ' ';
-	std::cout << '\n';
+	t1.set();
+	std::partial_sum(vIn.begin(), vIn.end(), vOut.begin());
+	t1.stop();
 
-	std::promise<int> x;
-	sub_partial_sum(in.begin(), in.end(), out.begin(), std::move(x));
-	
-	std::cout << "XX " << x.get_future().get();
+	t2.set();
+	p_partial_sum(vInMy.begin(), vInMy.end(), vOutMy.begin());
+	t2.stop();
+
+	std::cout << "std partial sum sequential [ms]: " << t1.elapsed_ms() << '\n';
+	std::cout << "my partial sum parallel [ms]: " << t2.elapsed_ms();
+
 }
