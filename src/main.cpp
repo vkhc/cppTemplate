@@ -52,8 +52,6 @@ std::vector<std::pair<iterator, iterator>> getDivisions(iterator begin, iterator
 	return output;
 }
 
-std::mutex m;
-
 template<typename inputIt, typename outputIt>
 void my_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
 {
@@ -84,7 +82,7 @@ void sub_partial_sum(inputIt begin, inputIt end, outputIt outBegin, std::promise
 }
 
 template<typename inputIt, typename outputIt>
-void sub_partial_sum2(inputIt begin, inputIt end, outputIt outBegin, typename std::iterator_traits<inputIt>::value_type& lastVal, char& lastValUpdated)
+bool sub_partial_sum2(inputIt begin, inputIt end, outputIt outBegin, typename std::iterator_traits<inputIt>::value_type& lastVal)
 {
 	using valType = std::iterator_traits<inputIt>::value_type;
 	valType sum = *begin;
@@ -96,7 +94,8 @@ void sub_partial_sum2(inputIt begin, inputIt end, outputIt outBegin, typename st
 	}
 
 	lastVal = std::move(sum);
-	lastValUpdated = 1;
+	
+	return true;
 }
 
 
@@ -148,16 +147,16 @@ void p_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
 		t.join();
 }
 
-bool check_vector(const std::vector<char>& v)
+template<typename T>
+bool check_vector(const T& v)
 {
-	for (const auto& i : v) {
+	for (const auto& i : v)
 		if (i == false)
 			return false;
-	}
-	//std::cout << "checking values: ";
-	//for (const auto& i : v)
-	//	std::cout << (int)i << ' ';
-	//std::cout << '\n';
+	// std::cout << "checking values: ";
+	// for (const auto& i : v)
+	// 	std::cout << (int)i << ' ';
+	// std::cout << '\n';
 	return true;
 }
 
@@ -171,7 +170,9 @@ void p2_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
 	using valType = std::iterator_traits<inputIt>::value_type;
 
 	std::vector<valType> increments(chunks.size() + 1);
-	std::vector<char> increments_done(chunks.size(), 0); // char instead of bool
+	std::vector<std::atomic<bool>> increments_done(chunks.size());
+	for (auto& value : increments_done)
+		value = false;
 	bool readyToIncrement = false;
 
 	std::mutex m;
@@ -187,11 +188,11 @@ void p2_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
 
 		threads.emplace_back([&readyToIncrement, &increments, &increments_done, &m, &cv, inFirst, inLast, outFirst, i]() {
 			
-			sub_partial_sum2<inputIt, outputIt>(inFirst, inLast, outFirst, increments[i + 1], increments_done[i]);
+			increments_done[i] = sub_partial_sum2<inputIt, outputIt>(inFirst, inLast, outFirst, increments[i + 1]);
 
 			std::unique_lock lk(m);
 			cv.wait(lk, [&]{ return readyToIncrement; });
-			//std::cout << "Thread " << std::this_thread::get_id() << " incrementing\n";
+			// std::cout << "Thread " << std::this_thread::get_id() << " incrementing\n";
 			for_each(outFirst, outFirst + std::distance(inFirst, inLast), [&](auto& x) { x += increments[i]; });
 
 		});
@@ -201,15 +202,15 @@ void p2_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
 	/* Problem Summary:
 		In debug works as expected, in release by adding artificial delaysd only*/
 
+	//std::this_thread::sleep_for(std::chrono::seconds(1));
 	while (true) {
 		if (check_vector(increments_done) == true) {
 			std::unique_lock lk(m);
-									//std::cout << "DBG: ";
-									//for (const auto& i : increments_done)
-									//	std::cout << (int)i << ' ';
-									//std::cout << '\n';
+									// std::cout << "DBG: ";
+									// for (const auto& i : increments_done)
+									// 	std::cout << (int)i << ' ';
+									// std::cout << '\n';
 			std::partial_sum(increments.begin(), increments.end(), increments.begin());
-			//std::this_thread::sleep_for(std::chrono::seconds(4));
 			readyToIncrement = true;
 			lk.unlock();
 			cv.notify_all();
@@ -223,7 +224,7 @@ void p2_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
 
 int main()
 {
-	std::vector<long long int> vIn = { 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 };//(860000000, 2);
+	std::vector<long long int> vIn(86000000, 2); //= { 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 };//
 	auto vOut = vIn;
 
 	auto vInMy = vIn;
@@ -242,16 +243,18 @@ int main()
 	std::cout << "std partial sum sequential [ms]: " << t1.elapsed_ms() << '\n';
 	std::cout << "my partial sum parallel [ms]: " << t2.elapsed_ms() << '\n';
 
-	 for (const auto& i : vOut)
-	 	std::cout << i << ' ';
-	 std::cout << '\n';
+	//  for (const auto& i : vOut)
+	//  	std::cout << i << ' ';
+	//  std::cout << '\n';
 
-	 for (const auto& i : vOutMy)
-	 	std::cout << i << ' ';
-	 std::cout << '\n';
+	//  for (const auto& i : vOutMy)
+	//  	std::cout << i << ' ';
+	//  std::cout << '\n';
 
 	// assert(vOut.size() == vOutMy.size() && "Size of outputs not equal");
-	// for (int i = 0; i < vOut.size(); ++i)
+	for (int i = 0; i < vOut.size(); ++i)
+		if (vOut[i] != vOutMy[i])
+			abort();
 	// 	assert(vOut[i] == vOutMy[i] && "Value not equal");
 
 }
