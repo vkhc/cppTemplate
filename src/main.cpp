@@ -23,7 +23,7 @@ struct myNum {
 
 myNum operator+(const myNum& lhs, const myNum& rhs)
 {
-	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	std::this_thread::sleep_for(std::chrono::nanoseconds(50));
 	return myNum{ lhs.number + rhs.number };
 }
 
@@ -67,22 +67,7 @@ void my_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
 }
 
 template<typename inputIt, typename outputIt>
-void sub_partial_sum(inputIt begin, inputIt end, outputIt outBegin, std::promise<typename std::iterator_traits<inputIt>::value_type> lastVal)
-{
-	using valType = std::iterator_traits<inputIt>::value_type;
-	valType sum = *begin;
-	*outBegin = sum;
-
-	while (++begin != end) {
-		sum = std::move(sum) + *begin;
-		*++outBegin = sum;
-	}
-
-	lastVal.set_value(sum);
-}
-
-template<typename inputIt, typename outputIt>
-bool sub_partial_sum2(inputIt begin, inputIt end, outputIt outBegin, typename std::iterator_traits<inputIt>::value_type& lastVal)
+bool sub_partial_sum(inputIt begin, inputIt end, outputIt outBegin, typename std::iterator_traits<inputIt>::value_type& lastVal)
 {
 	using valType = std::iterator_traits<inputIt>::value_type;
 	valType sum = *begin;
@@ -96,55 +81,6 @@ bool sub_partial_sum2(inputIt begin, inputIt end, outputIt outBegin, typename st
 	lastVal = std::move(sum);
 	
 	return true;
-}
-
-
-template<typename inputIt, typename outputIt>
-void p_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
-{
-	int nThreads = 8;
-	// Divide Array into subarrays
-	auto chunks = getDivisions(begin, end, nThreads);
-
-	using valType = std::iterator_traits<inputIt>::value_type;
-
-	std::vector<std::promise<valType>> increments(chunks.size() + 1);
-	std::vector<std::shared_future<valType>> incF(increments.size());
-
-	for (int i = 0; i < incF.size(); ++i) {
-		incF[i] = increments[i].get_future();
-	}
-	increments[0].set_value(0);
-
-	std::vector<std::thread> threads;
-	threads.reserve(chunks.size());
-
-	for (int i = 0; i < chunks.size(); ++i) {
-		auto inFirst = chunks[i].first;
-		auto inLast = chunks[i].second;
-		auto outFirst = outBegin + std::distance(begin, inFirst);
-		auto& promise = increments[i+1];
-
-#if 0
-		threads.emplace_back(partial_sum_increment<inputIt, outputIt>, inFirst, inLast, outFirst, std::move(promise), std::move(incF[i]));
-#else
-
-		threads.emplace_back([&promise, &incF, inFirst, inLast, outFirst, i]() {
-			sub_partial_sum<inputIt, outputIt>(inFirst, inLast, outFirst, std::move(promise));
-			//my_partial_sum(inFirst, inLast, outFirst);
-
-			auto incVal = typename std::iterator_traits<inputIt>::value_type();
-			for (int j = 0; j <= i; ++j) {
-				incVal += std::move(incF[j]).get();
-			}
-			for_each(outFirst, outFirst + std::distance(inFirst, inLast), [&](auto& x) { x += incVal; });
-		});
-
-#endif
-	}
-
-	for (auto& t : threads)
-		t.join();
 }
 
 template<typename T>
@@ -161,9 +97,9 @@ bool check_vector(const T& v)
 }
 
 template<typename inputIt, typename outputIt>
-void p2_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
+void p_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
 {
-	int nThreads = 4;
+	int nThreads = 16;
 	// Divide Array into subarrays
 	auto chunks = getDivisions(begin, end, nThreads);
 
@@ -188,12 +124,13 @@ void p2_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
 
 		threads.emplace_back([&readyToIncrement, &increments, &increments_done, &m, &cv, inFirst, inLast, outFirst, i]() {
 			
-			increments_done[i] = sub_partial_sum2<inputIt, outputIt>(inFirst, inLast, outFirst, increments[i + 1]);
+			increments_done[i] = sub_partial_sum<inputIt, outputIt>(inFirst, inLast, outFirst, increments[i + 1]);
 
 			std::unique_lock lk(m);
 			cv.wait(lk, [&]{ return readyToIncrement; });
+			auto val = increments[i];
 			// std::cout << "Thread " << std::this_thread::get_id() << " incrementing\n";
-			for_each(outFirst, outFirst + std::distance(inFirst, inLast), [&](auto& x) { x += increments[i]; });
+			for_each(outFirst, outFirst + std::distance(inFirst, inLast), [&](auto& x) { x += val; });
 
 		});
 
@@ -224,7 +161,7 @@ void p2_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
 
 int main()
 {
-	std::vector<long long int> vIn(86000000, 2); //= { 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 };//
+	std::vector<myNum> vIn(1000, random(-10000, 10000)); //= { 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 };//
 	auto vOut = vIn;
 
 	auto vInMy = vIn;
@@ -237,7 +174,8 @@ int main()
 	t1.stop();
 
 	t2.set();
-	p2_partial_sum(vInMy.begin(), vInMy.end(), vOutMy.begin());
+	p_partial_sum(vInMy.begin(), vInMy.end(), vOutMy.begin());
+	//std::exclusive_scan(std::execution::par, vInMy.begin(), vInMy.end(), vOutMy.begin(), vInMy.front());
 	t2.stop();
 
 	std::cout << "std partial sum sequential [ms]: " << t1.elapsed_ms() << '\n';
