@@ -3,6 +3,7 @@
 #include <iostream>
 #include <thread>
 #include <future>
+#include <barrier>
 #include <algorithm>
 #include <execution>
 #include <cassert>
@@ -17,13 +18,19 @@ struct myNum {
 		number += other.number;
 		return *this;
 	}
+	friend std::ostream& operator<<(std::ostream& os, const myNum& dt);
 
 	int number = 0;
 };
 
+std::ostream& operator<<(std::ostream& os, const myNum& dt)
+{
+	return os << dt.number;
+}
+
 myNum operator+(const myNum& lhs, const myNum& rhs)
 {
-	std::this_thread::sleep_for(std::chrono::nanoseconds(50));
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	return myNum{ lhs.number + rhs.number };
 }
 
@@ -67,7 +74,7 @@ void my_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
 }
 
 template<typename inputIt, typename outputIt>
-bool sub_partial_sum(inputIt begin, inputIt end, outputIt outBegin, typename std::iterator_traits<inputIt>::value_type& lastVal)
+void sub_partial_sum(inputIt begin, inputIt end, outputIt outBegin, typename std::iterator_traits<inputIt>::value_type& lastVal)
 {
 	using valType = std::iterator_traits<inputIt>::value_type;
 	valType sum = *begin;
@@ -79,8 +86,6 @@ bool sub_partial_sum(inputIt begin, inputIt end, outputIt outBegin, typename std
 	}
 
 	lastVal = std::move(sum);
-	
-	return true;
 }
 
 template<typename T>
@@ -99,69 +104,39 @@ bool check_vector(const T& v)
 template<typename inputIt, typename outputIt>
 void p_partial_sum(inputIt begin, inputIt end, outputIt outBegin)
 {
-	int nThreads = 16;
-	// Divide Array into subarrays
-	auto chunks = getDivisions(begin, end, nThreads);
-
 	using valType = std::iterator_traits<inputIt>::value_type;
 
-	std::vector<valType> increments(chunks.size() + 1);
-	std::vector<std::atomic<bool>> increments_done(chunks.size());
-	for (auto& value : increments_done)
-		value = false;
-	bool readyToIncrement = false;
+	int nThreads = 16;
+	auto chunks = getDivisions(begin, end, nThreads);
 
-	std::mutex m;
-	std::condition_variable cv;
-	std::vector<std::thread> threads;
+	std::vector<valType> increments(chunks.size() + 1);
+	std::vector<std::jthread> threads;
 	threads.reserve(chunks.size());
 
+	std::barrier barrier(chunks.size(), [&increments]() noexcept { std::partial_sum(increments.begin(), increments.end(), increments.begin()); });
 
 	for (int i = 0; i < chunks.size(); ++i) {
 		auto inFirst = chunks[i].first;
 		auto inLast = chunks[i].second;
 		auto outFirst = outBegin + std::distance(begin, inFirst);
 
-		threads.emplace_back([&readyToIncrement, &increments, &increments_done, &m, &cv, inFirst, inLast, outFirst, i]() {
+		threads.emplace_back([&barrier, &increments, inFirst, inLast, outFirst, i]() {
 			
-			increments_done[i] = sub_partial_sum<inputIt, outputIt>(inFirst, inLast, outFirst, increments[i + 1]);
+			sub_partial_sum<inputIt, outputIt>(inFirst, inLast, outFirst, increments[i + 1]);
 
-			std::unique_lock lk(m);
-			cv.wait(lk, [&]{ return readyToIncrement; });
+			barrier.arrive_and_wait();
+
 			auto val = increments[i];
-			// std::cout << "Thread " << std::this_thread::get_id() << " incrementing\n";
 			for_each(outFirst, outFirst + std::distance(inFirst, inLast), [&](auto& x) { x += val; });
 
 		});
 
 	}
-
-	/* Problem Summary:
-		In debug works as expected, in release by adding artificial delaysd only*/
-
-	//std::this_thread::sleep_for(std::chrono::seconds(1));
-	while (true) {
-		if (check_vector(increments_done) == true) {
-			std::unique_lock lk(m);
-									// std::cout << "DBG: ";
-									// for (const auto& i : increments_done)
-									// 	std::cout << (int)i << ' ';
-									// std::cout << '\n';
-			std::partial_sum(increments.begin(), increments.end(), increments.begin());
-			readyToIncrement = true;
-			lk.unlock();
-			cv.notify_all();
-			break;
-		}
-	}
-
-	for (auto& t : threads)
-		t.join();
 }
 
 int main()
 {
-	std::vector<myNum> vIn(1000, random(-10000, 10000)); //= { 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 };//
+	std::vector<myNum> vIn(1000, random(-100000, 100000));//{ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 };//
 	auto vOut = vIn;
 
 	auto vInMy = vIn;
@@ -181,13 +156,13 @@ int main()
 	std::cout << "std partial sum sequential [ms]: " << t1.elapsed_ms() << '\n';
 	std::cout << "my partial sum parallel [ms]: " << t2.elapsed_ms() << '\n';
 
-	//  for (const auto& i : vOut)
-	//  	std::cout << i << ' ';
-	//  std::cout << '\n';
+	//for (const auto& i : vOut)
+	//	std::cout << i << ' ';
+	//std::cout << '\n';
 
-	//  for (const auto& i : vOutMy)
-	//  	std::cout << i << ' ';
-	//  std::cout << '\n';
+	//for (const auto& i : vOutMy)
+	//	std::cout << i << ' ';
+	//std::cout << '\n';
 
 	// assert(vOut.size() == vOutMy.size() && "Size of outputs not equal");
 	for (int i = 0; i < vOut.size(); ++i)
